@@ -182,6 +182,61 @@ async function cleanupOldKeys(retentionDays = 90) {
   return result.changes;
 }
 
+/**
+ * Atomically create a new key and deprecate the old one.
+ * If new key creation fails, the old key remains active.
+ */
+async function rotateApiKey(oldKeyId, { gracePeriodDays = 30 } = {}) {
+  await initializeApiKeysTable();
+
+  const oldRow = await db.get(`SELECT * FROM api_keys WHERE id = ?`, [oldKeyId]);
+  if (!oldRow) return null;
+  if (oldRow.status === API_KEY_STATUS.REVOKED) return null;
+
+  // Create the new key first — if this throws, old key is untouched
+  const newKey = await createApiKey({
+    name: `${oldRow.name} (rotated)`,
+    role: oldRow.role,
+    createdBy: oldRow.created_by,
+    metadata: oldRow.metadata ? JSON.parse(oldRow.metadata) : {},
+    gracePeriodDays,
+  });
+
+  // Deprecate old key, set its grace period for auto-revoke, and link it to the new one
+  const now = Date.now();
+  await db.run(
+    `UPDATE api_keys SET status = 'deprecated', deprecated_at = ?, rotated_to_id = ?, grace_period_days = ? WHERE id = ?`,
+    [now, newKey.id, gracePeriodDays, oldKeyId]
+  );
+
+  return {
+    newKey,
+    oldKeyId,
+    deprecatedAt: new Date(now).toISOString(),
+    gracePeriodDays,
+    autoRevokeAt: new Date(now + gracePeriodDays * 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
+/**
+ * Revoke deprecated keys whose grace period has elapsed.
+ * Called by the background scheduler.
+ */
+async function revokeExpiredDeprecatedKeys() {
+  await initializeApiKeysTable();
+  const now = Date.now();
+  // deprecated_at + grace_period_days * ms_per_day <= now
+  const result = await db.run(
+    `UPDATE api_keys
+     SET status = 'revoked', revoked_at = ?
+     WHERE status = 'deprecated'
+       AND deprecated_at IS NOT NULL
+       AND (deprecated_at + (grace_period_days * 86400000)) <= ?`,
+    [now, now]
+  );
+  return result.changes;
+}
+
 module.exports = {
   initializeApiKeysTable,
   createApiKey,

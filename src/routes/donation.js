@@ -25,7 +25,7 @@ const { TRANSACTION_STATES } = require('../utils/transactionStateMachine');
 const { getStellarService } = require('../config/stellar');
 const DonationService = require('../services/DonationService');
 const { LIFECYCLE_STAGES } = require('../middleware/requestLifecycle');
-
+const federation = require('../utils/federation');
 const stellarService = getStellarService();
 const donationService = new DonationService(stellarService);
 
@@ -297,11 +297,17 @@ router.post('/', donationRateLimiter, requireApiKey, requireIdempotency, createD
       });
     }
 
+    // Resolve federation address if needed (e.g. alice*example.com → GABC...)
+    let resolvedRecipient = recipient;
+    if (federation.isFederationAddress(recipient)) {
+      resolvedRecipient = await federation.resolveRecipient(recipient);
+    }
+
     // Delegate to service
     const transaction = await donationService.createDonationRecord({
       amount: amountValidation.value,
       donor,
-      recipient,
+      recipient: resolvedRecipient,
       memo,
       idempotencyKey: req.idempotency.key
     });
