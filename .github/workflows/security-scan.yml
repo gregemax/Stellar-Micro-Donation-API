@@ -42,7 +42,7 @@ jobs:
 
       - name: Post PR Comment with Scan Results
         uses: actions/github-script@v8
-        if: github.event_name == 'pull_request' && failure()
+        if: github.event_name == 'pull_request' && failure() && github.event.pull_request.head.repo.fork == false
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
           script: |
