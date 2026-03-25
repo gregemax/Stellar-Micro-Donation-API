@@ -18,6 +18,7 @@ const statsRoutes = require('./stats');
 const streamRoutes = require('./stream');
 const transactionRoutes = require('./transaction');
 const apiKeysRoutes = require('./apiKeys');
+const recurringDonationRoutes = require('./recurringDonation');
 const { errorHandler, notFoundHandler } = require('../middleware/errorHandler');
 const logger = require('../middleware/logger');
 const { attachUserRole } = require('../middleware/rbac');
@@ -67,6 +68,7 @@ app.use(attachUserRole());
 // Routes
 app.use('/wallets', walletRoutes);
 app.use('/donations', donationRoutes);
+app.use('/donations/recurring', recurringDonationRoutes);
 app.use('/stats', statsRoutes);
 app.use('/stream', streamRoutes);
 app.use('/transactions', transactionRoutes);
