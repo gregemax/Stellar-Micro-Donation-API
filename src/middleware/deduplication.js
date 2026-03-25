@@ -54,42 +54,52 @@ function createDeduplicationMiddleware(options = {}) {
       return next();
     }
 
-    const fingerprint = computeFingerprint(req);
-    const cacheKey = `dedup:${fingerprint}`;
+    try {
+      const fingerprint = computeFingerprint(req);
+      const cacheKey = `dedup:${fingerprint}`;
 
-    // Check for cached response
-    const cached = Cache.get(cacheKey);
-    if (cached) {
-      log.debug('DEDUPLICATION', 'Returning cached response for duplicate request', {
-        fingerprint: fingerprint.substring(0, 16),
-        method: req.method,
-        path: req.path,
-      });
-      res.set('X-Deduplicated', 'true');
-      return res.status(cached.statusCode).json(cached.body);
-    }
+      // Check for cached response
+      const cached = Cache.get(cacheKey);
+      if (cached) {
+        log.debug('DEDUPLICATION', 'Returning cached response for duplicate request', {
+          fingerprint: fingerprint.substring(0, 16),
+          method: req.method,
+          path: req.path,
+        });
+        res.set('X-Deduplicated', 'true');
+        return res.status(cached.statusCode).json(cached.body);
+      }
 
-    // Intercept res.json() to cache successful responses
-    const originalJson = res.json.bind(res);
-    res.json = function (body) {
-      try {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          Cache.set(cacheKey, { statusCode: res.statusCode, body }, ttlMs);
-          log.debug('DEDUPLICATION', 'Cached response', {
+      // Intercept res.json() to cache successful responses
+      const originalJson = res.json.bind(res);
+      res.json = function (body) {
+        res.json = originalJson; // restore to prevent double-interception
+        try {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            Cache.set(cacheKey, { statusCode: res.statusCode, body }, ttlMs);
+            log.debug('DEDUPLICATION', 'Cached response', {
+              fingerprint: fingerprint.substring(0, 16),
+              statusCode: res.statusCode,
+            });
+          }
+        } catch (err) {
+          log.warn('DEDUPLICATION', 'Failed to cache response', {
+            error: err.message,
             fingerprint: fingerprint.substring(0, 16),
-            statusCode: res.statusCode,
           });
         }
-      } catch (err) {
-        log.warn('DEDUPLICATION', 'Failed to cache response', {
-          error: err.message,
-          fingerprint: fingerprint.substring(0, 16),
-        });
-      }
-      return originalJson(body);
-    };
+        return originalJson(body);
+      };
 
-    next();
+      next();
+    } catch (err) {
+      log.error('DEDUPLICATION', 'Deduplication middleware error', {
+        error: err.message,
+        path: req.path,
+        method: req.method,
+      });
+      next();
+    }
   };
 }
 
