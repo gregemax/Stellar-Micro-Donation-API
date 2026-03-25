@@ -12,8 +12,8 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../../src/.env') });
 
 // External modules
+const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
-require('dotenv').config({ path: path.join(__dirname, '../../src/.env') });
 
 // Internal modules
 const { DatabaseError, DuplicateError } = require('./errors');
