@@ -113,6 +113,11 @@ const createDonationSchema = validateSchema({
         required: false,
         nullable: true,
       },
+      anonymous: {
+        type: 'boolean',
+        required: false,
+        nullable: true,
+      },
     },
   },
 });
@@ -381,7 +386,7 @@ router.post('/batch', payloadSizeLimiter(ENDPOINT_LIMITS.batchDonation), batchRa
  */
 router.post('/', payloadSizeLimiter(ENDPOINT_LIMITS.singleDonation), donationRateLimiter, requireApiKey, requireIdempotency, createDonationSchema, async (req, res, next) => {
   try {
-    const { amount, currency, donor, recipient, memo, memoType, notes, tags } = req.body;
+    const { amount, currency, donor, recipient, memo, memoType, notes, tags, anonymous } = req.body;
 
     // Basic validation
     if (!amount || !recipient) {
@@ -431,7 +436,8 @@ router.post('/', payloadSizeLimiter(ENDPOINT_LIMITS.singleDonation), donationRat
       tags,
       idempotencyKey: req.idempotency.key,
       apiKeyId: req.apiKey ? req.apiKey.id : null,
-      apiKeyRole: req.apiKey ? req.apiKey.role : (req.user?.role || 'user')
+      apiKeyRole: req.apiKey ? req.apiKey.role : (req.user?.role || 'user'),
+      anonymous: anonymous === true,
     });
 
     // Estimate fee for informational purposes (non-blocking)
@@ -464,6 +470,42 @@ router.post('/', payloadSizeLimiter(ENDPOINT_LIMITS.singleDonation), donationRat
 
     await storeIdempotencyResponse(req, response);
     res.status(201).json(response);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /donations/verify-anonymous
+ * Allow a donor to prove their anonymous donation using their wallet address.
+ *
+ * Query parameters:
+ *   - donationId    {string} - The ID of the anonymous donation
+ *   - walletAddress {string} - The donor's wallet address to verify
+ *
+ * Returns { verified: boolean, donationId, pseudonymousId, amount, recipient, timestamp }
+ */
+router.get('/verify-anonymous', checkPermission(PERMISSIONS.DONATIONS_READ), async (req, res, next) => {
+  try {
+    const { donationId, walletAddress } = req.query;
+
+    if (!donationId || !walletAddress) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'MISSING_REQUIRED_FIELDS',
+          message: 'donationId and walletAddress query parameters are required',
+        },
+      });
+    }
+
+    const result = donationService.verifyAnonymousDonation(donationId, walletAddress);
+
+    if (req.markLifecycleStage) {
+      req.markLifecycleStage(LIFECYCLE_STAGES.PROCESSED);
+    }
+
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }

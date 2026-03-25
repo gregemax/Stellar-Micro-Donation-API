@@ -16,6 +16,7 @@ const donationValidator = require('../utils/donationValidator');
 const memoValidator = require('../utils/memoValidator');
 const { calculateAnalyticsFee } = require('../utils/feeCalculator');
 const { sanitizeIdentifier, sanitizeMemo } = require('../utils/sanitizer');
+const { generatePseudonymousId } = require('../utils/anonymization');
 const { TRANSACTION_STATES } = require('../utils/transactionStateMachine');
 const { ValidationError, NotFoundError, ERROR_CODES } = require('../utils/errors');
 const { PREDEFINED_TAGS } = require('../constants/tags');
@@ -379,9 +380,20 @@ class DonationService {
    * @param {string} params.idempotencyKey - Idempotency key
    * @returns {Object} Created transaction
    */
-  async createDonationRecord({ amount, currency = 'XLM', donor, recipient, memo, notes, tags, memoType = 'text', apiKeyId, apiKeyRole = 'user', idempotencyKey, receivedAmount, sessionId }) {
+  async createDonationRecord({ amount, currency = 'XLM', donor, recipient, memo, notes, tags, memoType = 'text', apiKeyId, apiKeyRole = 'user', idempotencyKey, receivedAmount, sessionId, anonymous = false }) {
     // Sanitize identifiers
-    const sanitizedDonor = donor ? sanitizeIdentifier(donor) : 'Anonymous';
+    const rawDonor = donor ? sanitizeIdentifier(donor) : 'Anonymous';
+
+    // When anonymous=true, replace the real wallet address with a pseudonymous ID
+    let sanitizedDonor;
+    let pseudonymousId = null;
+    if (anonymous && rawDonor && rawDonor !== 'Anonymous') {
+      pseudonymousId = generatePseudonymousId(rawDonor);
+      sanitizedDonor = pseudonymousId;
+    } else {
+      sanitizedDonor = rawDonor;
+    }
+
     const sanitizedRecipient = sanitizeIdentifier(recipient);
 
     // Validate donor and recipient are different
@@ -465,7 +477,10 @@ class DonationService {
       // Overpayment fields (null when no overpayment)
       overpaymentFlagged: overpayment ? true : false,
       overpaymentDetails: overpayment || null,
-      campaign_id: campaign_id || null
+      campaign_id: campaign_id || null,
+      // Anonymous donation fields
+      anonymous: anonymous === true,
+      pseudonymousId: pseudonymousId || null,
     });
 
     if (campaign_id) {
@@ -788,27 +803,113 @@ class DonationService {
   }
 
   /**
-   * Get recent donations with limit
+   * Get recent donations with limit.
+   * Anonymous donations are included but their donor field shows the pseudonymous ID,
+   * so they are naturally excluded from any real-identity leaderboard.
    * @param {number} limit - Maximum number of donations to return
+   * @param {Object} [options]
+   * @param {boolean} [options.excludeAnonymous=false] - When true, omit anonymous donations entirely (e.g. for public leaderboards)
    * @returns {Array} Array of sanitized transactions
    */
-  getRecentDonations(limit = 10) {
-    const transactions = Transaction.getAll();
+  getRecentDonations(limit = 10, { excludeAnonymous = false } = {}) {
+    let transactions = Transaction.getAll();
+
+    // Exclude anonymous donations when building public leaderboards
+    if (excludeAnonymous) {
+      transactions = transactions.filter(tx => !tx.anonymous);
+    }
 
     // Sort by timestamp descending (most recent first)
     const sortedTransactions = transactions
       .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
       .slice(0, limit);
 
-    // Remove sensitive data
+    // Remove sensitive data; anonymous donations expose pseudonymousId instead of real donor
     return sortedTransactions.map(tx => ({
       id: tx.id,
       amount: tx.amount,
-      donor: tx.donor,
+      donor: tx.anonymous ? tx.pseudonymousId : tx.donor,
       recipient: tx.recipient,
       timestamp: tx.timestamp,
-      status: tx.status
+      status: tx.status,
+      anonymous: tx.anonymous || false,
     }));
+  }
+
+  /**
+   * Verify that a wallet address corresponds to an anonymous donation.
+   *
+   * Allows a donor to prove ownership of an anonymous donation without
+   * revealing their wallet address publicly. The donor provides their wallet
+   * address privately; this method checks it against the stored pseudonymous ID.
+   *
+   * @param {string} donationId    - The ID of the anonymous donation to verify.
+   * @param {string} walletAddress - The donor's wallet address to verify against.
+   * @returns {{ verified: boolean, donationId: string, pseudonymousId: string, amount: number, recipient: string, timestamp: string }}
+   * @throws {NotFoundError}   If the donation does not exist.
+   * @throws {ValidationError} If the donation is not anonymous or inputs are invalid.
+   */
+  verifyAnonymousDonation(donationId, walletAddress) {
+    const { verifyPseudonymousId } = require('../utils/anonymization');
+
+    if (!donationId || typeof donationId !== 'string') {
+      throw new ValidationError('donationId is required', null, ERROR_CODES.INVALID_REQUEST);
+    }
+    if (!walletAddress || typeof walletAddress !== 'string') {
+      throw new ValidationError('walletAddress is required', null, ERROR_CODES.INVALID_REQUEST);
+    }
+
+    const donation = this.getDonationById(donationId);
+
+    if (!donation.anonymous) {
+      throw new ValidationError(
+        'This donation is not anonymous and does not require pseudonymous verification',
+        null,
+        ERROR_CODES.INVALID_REQUEST
+      );
+    }
+
+    const verified = verifyPseudonymousId(walletAddress, donation.pseudonymousId);
+
+    return {
+      verified,
+      donationId: donation.id,
+      pseudonymousId: donation.pseudonymousId,
+      amount: donation.amount,
+      recipient: donation.recipient,
+      timestamp: donation.timestamp,
+    };
+  }
+
+  /**
+   * Get the public leaderboard — top donors by total donated amount.
+   * Anonymous donations are excluded so that pseudonymous IDs do not appear
+   * in public rankings.
+   *
+   * @param {number} [limit=10] - Maximum number of donors to return.
+   * @returns {Array<{ donor: string, totalDonated: number, donationCount: number }>}
+   */
+  getLeaderboard(limit = 10) {
+    const transactions = Transaction.getAll();
+
+    // Exclude anonymous donations from the public leaderboard
+    const publicTransactions = transactions.filter(tx => !tx.anonymous);
+
+    const donorMap = new Map();
+    for (const tx of publicTransactions) {
+      const key = tx.donor || 'Anonymous';
+      if (!donorMap.has(key)) {
+        donorMap.set(key, { donor: key, totalDonated: 0, donationCount: 0 });
+      }
+      const entry = donorMap.get(key);
+      entry.totalDonated += parseFloat(tx.amount) || 0;
+      entry.donationCount += 1;
+    }
+
+    return Array.from(donorMap.values())
+      .sort((a, b) => b.totalDonated - a.totalDonated)
+      .slice(0, limit)
+      .map(d => ({ ...d, totalDonated: +d.totalDonated.toFixed(7) }));
   }
 
   /**
