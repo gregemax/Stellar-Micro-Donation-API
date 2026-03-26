@@ -103,7 +103,6 @@ class DonationService {
    * @param {string} params.requestId - Request ID for logging
    * @returns {Promise<Object>} Donation result with transaction details
    */
-  async sendCustodialDonation({ senderId, receiverId, amount, memo, notes, tags, apiKeyId, idempotencyKey, requestId, campaign_id }) {
   async sendCustodialDonation({ senderId, receiverId, amount, memo, notes, tags, apiKeyId, campaign_id, idempotencyKey, requestId }) {
     log.debug('DONATION_SERVICE', 'Processing custodial donation', {
       requestId,
@@ -491,8 +490,6 @@ class DonationService {
    * @param {string} params.idempotencyKey - Idempotency key
    * @returns {Object} Created transaction
    */
-  async createDonationRecord({ amount, currency = 'XLM', donor, recipient, memo, notes, tags, memoType = 'text', apiKeyId, apiKeyRole = 'user', idempotencyKey, receivedAmount, sessionId, campaign_id = null, memoEnvelope = null, encryptionMetadata = null }) {
-  async createDonationRecord({ amount, currency = 'XLM', donor, recipient, memo, notes, tags, memoType = 'text', apiKeyId, apiKeyRole = 'user', idempotencyKey, receivedAmount, sessionId, anonymous = false, campaign_id }) {
   async createDonationRecord({
     amount,
     currency = 'XLM',
@@ -507,9 +504,12 @@ class DonationService {
     idempotencyKey,
     receivedAmount,
     sessionId,
-    campaign_id,
+    campaign_id = null,
+    anonymous = false,
     sourceAsset,
     sourceAmount,
+    memoEnvelope = null,
+    encryptionMetadata = null,
   }) {
     // Sanitize identifiers
     const rawDonor = donor ? sanitizeIdentifier(donor) : 'Anonymous';
@@ -999,7 +999,6 @@ class DonationService {
       transactions = transactions.filter(tx => tx.tags && tx.tags.includes(filters.tag));
     }
 
-    const result = paginateCollection(transactions, {
     const sortBy = filters.sortBy || 'timestamp';
     const order = filters.order || 'desc';
     const useCustomSort = sortBy !== 'timestamp' || order !== 'desc';
