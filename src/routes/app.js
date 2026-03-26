@@ -19,15 +19,22 @@ const statsRoutes = require('./stats');
 const streamRoutes = require('./stream');
 const transactionRoutes = require('./transaction');
 const apiKeysRoutes = require('./apiKeys');
+const recurringDonationRoutes = require('./recurringDonation');
 const feesRoutes = require('./fees');
 const featureFlagsAdminRoutes = require('./admin/featureFlags');
+const createFeeBumpRouter = require('./admin/feeBump');
+const dbAdminRoutes = require('./admin/db');
 const retentionAdminRoutes = require('./admin/retention');
+const matchingProgramsAdminRoutes = require('./admin/matchingPrograms');
 const networkRoutes = require('./network');
 const webhooksRoutes = require('./webhooks');
 const campaignsRoutes = require('./campaigns');
 const offersRoutes = require('./offers');
 const tagsRoutes = require('./tags');
 const authRoutes = require('./auth');
+const exportsRoutes = require('./exports');
+const channelsRoutes = require('./channels');
+const { createGraphQLRouter, attachSubscriptionServer } = require('../graphql');
 const { errorHandler, notFoundHandler } = require('../middleware/errorHandler');
 const logger = require('../middleware/logger');
 const { attachUserRole } = require('../middleware/rbac');
@@ -41,9 +48,10 @@ const { validateRBAC } = require('../utils/rbacValidator');
 const log = require('../utils/log');
 const requestId = require('../middleware/requestId');
 const serviceContainer = require('../config/serviceContainer');
-const { payloadSizeLimiter, ENDPOINT_LIMITS } = require('../middleware/payloadSizeLimiter');
+const { payloadSizeLimiter } = require('../middleware/payloadSizeLimiter');
 const { createCorsMiddleware } = require('../middleware/cors');
 const { responseFormatterMiddleware } = require('../utils/responseFormatter');
+const { createDeduplicationMiddleware } = require('../middleware/deduplication');
 const {
   logStartupDiagnostics,
   logShutdownDiagnostics,
@@ -51,6 +59,7 @@ const {
 const { parseCursorPaginationQuery } = require('../utils/pagination');
 const AuditLogService = require('../services/AuditLogService');
 const auditLogRetentionService = require('../services/AuditLogRetentionService');
+const { runCleanup } = require('../jobs/cleanupJob');
 
 const app = express();
 
@@ -143,22 +152,38 @@ app.use(require('../middleware/suspiciousPatternDetection'));
 // Attach user role from authentication (must be before routes)
 app.use(attachUserRole());
 
+// Content-based request deduplication (for requests without idempotency keys)
+app.use(createDeduplicationMiddleware());
+
 // Routes
 app.use('/wallets', walletRoutes);
 app.use('/donations', donationRoutes);
+app.use('/donations/recurring', recurringDonationRoutes);
 app.use('/stats', statsRoutes);
 app.use('/stream', streamRoutes);
 app.use('/transactions', transactionRoutes);
 app.use('/api-keys', apiKeysRoutes);
 app.use('/fees', feesRoutes);
 app.use('/admin/feature-flags', featureFlagsAdminRoutes);
+app.use('/admin/db', dbAdminRoutes);
 app.use('/admin/retention', retentionAdminRoutes);
+app.use('/admin/matching-programs', matchingProgramsAdminRoutes);
+
+// Fee bump admin route — lazy access to serviceContainer
+app.use('/admin/transactions', (req, res, next) => {
+  const serviceContainer = require('../config/serviceContainer');
+  const feeBumpRouter = createFeeBumpRouter(serviceContainer.getFeeBumpService());
+  feeBumpRouter(req, res, next);
+});
 app.use('/network', networkRoutes);
 app.use('/webhooks', webhooksRoutes);
 app.use('/campaigns', campaignsRoutes);
 app.use('/offers', offersRoutes);
 app.use('/tags', tagsRoutes);
 app.use('/auth', authRoutes);
+app.use('/exports', exportsRoutes);
+app.use('/channels', channelsRoutes);
+app.use('/graphql', createGraphQLRouter());
 
 // Exchange rates endpoint
 app.get('/exchange-rates', async (req, res) => {
@@ -172,7 +197,6 @@ app.get('/exchange-rates', async (req, res) => {
         rates,
         supportedCurrencies: ['XLM', ...priceOracle.SUPPORTED_CURRENCIES.map(c => c.toUpperCase())],
         cachedAt: new Date().toISOString(),
-      }
       },
     });
   } catch (err) {
@@ -412,9 +436,15 @@ async function startServer() {
     await validateRBAC();
 
     const server = app.listen(PORT, async () => {
+      // Attach GraphQL WebSocket subscription server
+      attachSubscriptionServer(server);
+
       recurringDonationScheduler.start();
       reconciliationService.start();
       auditLogRetentionService.start();
+
+      runCleanup(); // Run once on startup
+    const cleanupInterval = setInterval(runCleanup, 24 * 60 * 60 * 1000);
       
       // Initialize and start network status monitoring
       try {
@@ -451,6 +481,8 @@ async function startServer() {
       isShuttingDown = true;
       log.info("SHUTDOWN", `Received ${signal}, starting graceful shutdown`);
       logShutdownDiagnostics(signal);
+
+      clearInterval(cleanupInterval); // Stop the timer so the process can exit
 
       const timeoutMs = parseInt(process.env.SHUTDOWN_TIMEOUT || '30000', 10);
       const forceExit = setTimeout(() => {
