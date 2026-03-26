@@ -22,6 +22,7 @@ const { validateRequiredFields, validateFloat, validateInteger } = require('../u
 
 const { getStellarService } = require('../config/stellar');
 const DonationService = require('../services/DonationService');
+const { calculateCostBreakdown } = require('../utils/costBreakdown');
 
 const stellarService = getStellarService();
 const donationService = new DonationService(stellarService);
@@ -259,6 +260,64 @@ router.get('/recent', checkPermission(PERMISSIONS.DONATIONS_READ), (req, res, ne
       count: transactions.length,
       limit: limitValidation.value
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /donations/cost-breakdown
+ * Return an itemized cost breakdown for a proposed donation.
+ *
+ * Query parameters:
+ *   @param {string}  amount              - Donation amount in XLM (required, > 0)
+ *   @param {string}  [sender]            - Sender public key (optional, for future balance checks)
+ *   @param {number}  [surgeFeeMultiplier=1]    - Surge fee multiplier (>= 1)
+ *   @param {number}  [xlmUsdRate=0]      - Current XLM/USD rate for USD equivalents
+ *
+ * Platform fee is read from PLATFORM_FEE_PERCENT env variable (default 0).
+ *
+ * @access donations:read
+ */
+router.get('/cost-breakdown', checkPermission(PERMISSIONS.DONATIONS_READ), (req, res, next) => {
+  try {
+    const { amount, surgeFeeMultiplier, xlmUsdRate } = req.query;
+
+    if (!amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query parameter "amount" is required',
+      });
+    }
+
+    const amountValidation = validateFloat(amount);
+    if (!amountValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid amount: ${amountValidation.error}`,
+      });
+    }
+
+    // Read platform fee from env (default 0, max 100)
+    const platformFeePercent = Math.min(
+      Math.max(parseFloat(process.env.PLATFORM_FEE_PERCENT || '0') || 0, 0),
+      100
+    );
+
+    const surgeMultiplier = surgeFeeMultiplier
+      ? Math.max(parseFloat(surgeFeeMultiplier) || 1, 1)
+      : 1;
+
+    const usdRate = xlmUsdRate ? parseFloat(xlmUsdRate) || 0 : 0;
+
+    const breakdown = calculateCostBreakdown({
+      amount: amountValidation.value,
+      surgeFeeMultiplier: surgeMultiplier,
+      platformFeePercent,
+      xlmUsdRate: usdRate,
+    });
+
+    return res.json({ success: true, data: breakdown });
   } catch (error) {
     next(error);
   }
