@@ -3,10 +3,11 @@
  * 
  * RESPONSIBILITY: HTTP request handling for API key management operations
  * OWNER: Security Team
- * DEPENDENCIES: API Keys model, middleware (auth, RBAC), validation helpers
+ * DEPENDENCIES: API Keys model, middleware (auth, RBAC), validation helpers, scope validator
  * 
  * Admin-only endpoints for API key lifecycle management including creation, listing,
- * rotation, deprecation, and revocation. Supports zero-downtime key rotation.
+ * rotation, deprecation, and revocation. Supports zero-downtime key rotation and
+ * fine-grained scope-based access control.
  */
 
 const express = require('express');
@@ -15,6 +16,7 @@ const apiKeysModel = require('../models/apiKeys');
 const { requireAdmin } = require('../middleware/rbac');
 const { ValidationError } = require('../utils/errors');
 const { validateNonEmptyString, validateRole, validateInteger } = require('../utils/validationHelpers');
+const { validateScopes } = require('../utils/scopeValidator');
 
 const AuditLogService = require('../services/AuditLogService');
 const TOTPService = require('../services/TOTPService');
@@ -65,6 +67,7 @@ const apiKeyCleanupSchema = validateSchema({
 /**
  * POST /api/v1/api-keys
  * Create a new API key (admin only)
+ * Request body can include optional 'scopes' array for fine-grained access control
  */
 router.post('/', requireAdmin(), apiKeyCreateSchema, async (req, res, next) => {
   try {
@@ -85,6 +88,12 @@ router.post('/', requireAdmin(), apiKeyCreateSchema, async (req, res, next) => {
       if (!expiresValidation.valid) {
         throw new ValidationError(`Invalid expiresInDays: ${expiresValidation.error}`);
       }
+    }
+
+    // Validate scopes
+    const scopeValidation = validateScopes(scopes);
+    if (!scopeValidation.valid) {
+      throw new ValidationError(`Invalid scopes: ${scopeValidation.errors.join('; ')}`);
     }
 
     const keyInfo = await apiKeysModel.createApiKey({
@@ -112,6 +121,8 @@ router.post('/', requireAdmin(), apiKeyCreateSchema, async (req, res, next) => {
         keyId: keyInfo.id,
         keyName: name.trim(),
         role,
+        scopesCount: scopeValidation.scopes.length,
+        scopes: scopeValidation.scopes,
         expiresInDays,
         createdBy: req.user.id
       }
@@ -125,6 +136,7 @@ router.post('/', requireAdmin(), apiKeyCreateSchema, async (req, res, next) => {
         keyPrefix: keyInfo.keyPrefix,
         name: keyInfo.name,
         role: keyInfo.role,
+        scopes: keyInfo.scopes,
         status: keyInfo.status,
         createdAt: keyInfo.createdAt,
         expiresAt: keyInfo.expiresAt,

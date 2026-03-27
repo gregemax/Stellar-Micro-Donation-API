@@ -3,15 +3,17 @@
  * 
  * RESPONSIBILITY: Role-based access control and permission validation
  * OWNER: Security Team
- * DEPENDENCIES: Permissions model, API Keys model, config
+ * DEPENDENCIES: Permissions model, API Keys model, config, Scope validator
  * 
  * Enforces granular permission checks for API endpoints. Handles transition between
  * legacy environment-based keys and database-backed API key system with RBAC.
+ * Supports fine-grained scope-based access control for API keys.
  */
 
 const { UnauthorizedError, ForbiddenError } = require('../utils/errors');
 const { hasPermission } = require('../models/permissions');
 const { validateApiKey } = require('../models/apiKeys');
+const { hasScope, hasAllScopes, hasAnyScope } = require('../utils/scopeValidator');
 const config = require('../config');
 const AuditLogService = require('../services/AuditLogService');
 const perKeyRateLimit = require('./perKeyRateLimit');
@@ -26,11 +28,13 @@ const legacyKeys = config.apiKeys.legacy;
 /**
  * Single Permission Validator
  * Intent: Restrict endpoint access to users possessing a specific permission string.
+ * Validates against both role-based and scope-based permissions.
  * Flow:
  * 1. Verify existence of req.user object (populated by attachUserRole).
  * 2. Extract current role (defaults to 'guest' if undefined).
  * 3. Cross-reference role and permission against the permissions model.
- * 4. Pass control to next middleware if authorized; otherwise, propagate a ForbiddenError.
+ * 4. If API key has scopes, additionally check that the required permission is in the scopes.
+ * 5. Pass control to next middleware if authorized; otherwise, propagate a ForbiddenError.
  */
 exports.checkPermission = (permission) => {
   return async (req, res, next) => {
@@ -41,7 +45,23 @@ exports.checkPermission = (permission) => {
 
       const userRole = req.user.role || 'guest';
 
-      if (!hasPermission(userRole, permission)) {
+      // Check role-based permissions
+      const roleHasPermission = hasPermission(userRole, permission);
+      
+      // Check scope-based permissions (if API key has scopes)
+      let scopeHasPermission = true;
+      if (req.apiKey && req.apiKey.scopes && Array.isArray(req.apiKey.scopes) && req.apiKey.scopes.length > 0) {
+        scopeHasPermission = hasScope(req.apiKey.scopes, permission);
+      }
+
+      // Both role AND scope permissions must be satisfied
+      const hasAccess = roleHasPermission && scopeHasPermission;
+
+      if (!hasAccess) {
+        const denialReason = !roleHasPermission 
+          ? `Missing role permission: ${permission}` 
+          : `Missing scope: ${permission}`;
+        
         // Audit log: Permission denied (non-fatal)
         AuditLogService.log({
           category: AuditLogService.CATEGORY.AUTHORIZATION,
@@ -52,11 +72,13 @@ exports.checkPermission = (permission) => {
           requestId: req.id,
           ipAddress: req.ip,
           resource: req.path,
-          reason: `Missing permission: ${permission}`,
+          reason: denialReason,
           details: {
             userRole,
             requiredPermission: permission,
-            method: req.method
+            method: req.method,
+            hasScope: !roleHasPermission ? 'N/A' : scopeHasPermission,
+            apiKeyId: req.apiKey?.id,
           }
         }).catch(() => {});
 
@@ -76,7 +98,9 @@ exports.checkPermission = (permission) => {
         details: {
           userRole,
           grantedPermission: permission,
-          method: req.method
+          method: req.method,
+          scopeVerified: req.apiKey?.scopes ? true : false,
+          apiKeyId: req.apiKey?.id,
         }
       }).catch(() => {});
 
@@ -90,10 +114,12 @@ exports.checkPermission = (permission) => {
 /**
  * Union Permission Validator (OR Logic)
  * Intent: Allow access if the user meets any one of multiple permission criteria.
+ * Validates against both role-based and scope-based permissions.
  * Flow:
  * 1. Iterates through the 'permissions' array.
  * 2. Uses Array.prototype.some() to find at least one valid role-permission match.
- * 3. If no matches are found, generates a descriptive error listing all acceptable permissions.
+ * 3. If API key has scopes, also checks that at least one scope permission matches.
+ * 4. If no matches are found, generates a descriptive error listing all acceptable permissions.
  */
 exports.checkAnyPermission = (permissions) => {
   return (req, res, next) => {
@@ -103,11 +129,20 @@ exports.checkAnyPermission = (permissions) => {
       }
 
       const userRole = req.user.role || 'guest';
-      const hasAnyPermission = permissions.some(permission =>
+      
+      // Check role-based permissions
+      const roleHasAnyPermission = permissions.some(permission =>
         hasPermission(userRole, permission)
       );
+      
+      // Check scope-based permissions (if API key has scopes)
+      let scopeHasAnyPermission = true;
+      if (req.apiKey && req.apiKey.scopes && Array.isArray(req.apiKey.scopes) && req.apiKey.scopes.length > 0) {
+        scopeHasAnyPermission = hasAnyScope(req.apiKey.scopes, permissions);
+      }
 
-      if (!hasAnyPermission) {
+      // Both role AND scope must satisfy at least one permission
+      if (!roleHasAnyPermission || !scopeHasAnyPermission) {
         throw new ForbiddenError(`Insufficient permissions. Required one of: ${permissions.join(', ')}`);
       }
 
@@ -121,10 +156,12 @@ exports.checkAnyPermission = (permissions) => {
 /**
  * Intersection Permission Validator (AND Logic)
  * Intent: Enforce high-security access requiring a user to possess every listed permission.
+ * Validates against both role-based and scope-based permissions.
  * Flow:
  * 1. Evaluates the entire array of required permissions using Array.prototype.every().
  * 2. Ensures the user role supports the full set of required operations.
- * 3. Strict failure if even one permission is missing from the user's role profile.
+ * 3. If API key has scopes, also checks that all scope permissions are present.
+ * 4. Strict failure if even one permission is missing from the user's role or scopes.
  */
 exports.checkAllPermissions = (permissions) => {
   return (req, res, next) => {
@@ -134,11 +171,20 @@ exports.checkAllPermissions = (permissions) => {
       }
 
       const userRole = req.user.role || 'guest';
-      const hasAllPermissions = permissions.every(permission =>
+      
+      // Check role-based permissions
+      const roleHasAllPermissions = permissions.every(permission =>
         hasPermission(userRole, permission)
       );
+      
+      // Check scope-based permissions (if API key has scopes)
+      let scopeHasAllPermissions = true;
+      if (req.apiKey && req.apiKey.scopes && Array.isArray(req.apiKey.scopes) && req.apiKey.scopes.length > 0) {
+        scopeHasAllPermissions = hasAllScopes(req.apiKey.scopes, permissions);
+      }
 
-      if (!hasAllPermissions) {
+      // Both role AND scope must satisfy all permissions
+      if (!roleHasAllPermissions || !scopeHasAllPermissions) {
         throw new ForbiddenError(`Insufficient permissions. Required all of: ${permissions.join(', ')}`);
       }
 
@@ -262,10 +308,11 @@ exports.requireAdmin = () => {
 /**
  * Identity & Role Attachment Middleware
  * Intent: The central authentication hub that bridges legacy keys and modern DB keys.
+ * Attaches both role and scope information to the request context.
  * Flow:
  * 1. Checks if 'req.apiKey' was already resolved by a previous middleware (optimization).
  * 2. Scans 'x-api-key' header.
- * 3. Database Lookup: Validates key, checks expiration/revocation, and identifies role.
+ * 3. Database Lookup: Validates key, checks expiration/revocation, and identifies role and scopes.
  * 4. Deprecation Handling: If key is marked deprecated, injects 'Warning' headers into response.
  * 5. Legacy Fallback: Checks against process.env.API_KEYS if DB lookup fails.
  * 6. Context Injection: Populates req.user with a standardized identity object for downstream use.
@@ -283,6 +330,7 @@ exports.attachUserRole = () => {
           role: role,
           name: req.apiKey.name || `API Key User (${role})`,
           apiKeyId: req.apiKey.id,
+          scopes: req.apiKey.scopes || [],
           isLegacy: req.apiKey.isLegacy || false
         };
       }
@@ -298,6 +346,7 @@ exports.attachUserRole = () => {
             role: keyInfo.role || 'user',
             name: keyInfo.name || `API Key User (${keyInfo.role || 'user'})`,
             apiKeyId: keyInfo.id,
+            scopes: keyInfo.scopes || [],
             isLegacy: false
           };
 
@@ -322,6 +371,7 @@ exports.attachUserRole = () => {
             id: `apikey-${apiKey}`,
             role: apiKey.startsWith('admin-') ? 'admin' : 'user',
             name: 'Legacy API Key User',
+            scopes: [],
             isLegacy: true
           };
         }
@@ -338,7 +388,7 @@ exports.attachUserRole = () => {
       }
       // Default: Unauthenticated Guest access
       else {
-        req.user = { id: 'guest', role: 'guest', name: 'Guest' };
+        req.user = { id: 'guest', role: 'guest', name: 'Guest', scopes: [] };
       }
 
       // Apply per-key rate limiting if a DB-backed key is present
