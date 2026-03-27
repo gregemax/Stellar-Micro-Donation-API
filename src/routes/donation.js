@@ -1302,6 +1302,10 @@ router.get('/:id', checkPermission(PERMISSIONS.DONATIONS_READ), donationIdParamS
       req.markLifecycleStage(LIFECYCLE_STAGES.PROCESSED);
     }
 
+    // HTTP/2 server push + Link header for related resources
+    const { pushDonationRelated } = require('../utils/pushHelper');
+    pushDonationRelated(req, res, transaction);
+
     res.json({
       success: true,
       data: applyNotePrivacy(req, transaction)
