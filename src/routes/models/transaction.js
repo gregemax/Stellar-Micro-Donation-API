@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 const donationEvents = require('../../events/donationEvents');
 const {
   TRANSACTION_STATES,
@@ -66,7 +67,7 @@ class Transaction {
     const nowIso = new Date().toISOString();
     const newTransaction = {
       ...transactionData,
-      id: transactionData.id || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: transactionData.id || uuidv4(),
       amount: transactionData.amount,
       donor: transactionData.donor,
       recipient: transactionData.recipient,
