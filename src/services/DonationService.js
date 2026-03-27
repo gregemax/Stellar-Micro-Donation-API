@@ -26,6 +26,7 @@ const { CONFIRMATION_LEDGER_THRESHOLD } = require('../config/confirmationThresho
 
 const LimitService = require('./LimitService');
 const MatchingProgramService = require('./MatchingProgramService');
+const CorporateMatchingService = require('./CorporateMatchingService');
 const log = require('../utils/log');
 const priceOracle = require('./PriceOracleService');
 const { buildOverpaymentRecord } = require('../utils/overpaymentDetector');
@@ -731,6 +732,24 @@ class DonationService {
       }
     } catch (err) {
       log.error('DONATION_SERVICE', 'Failed to process donation matching', { error: err.message });
+    }
+
+    // Process corporate matching programs (non-blocking)
+    try {
+      // Get sender user ID from public key
+      const senderUser = await Database.get('SELECT id FROM users WHERE publicKey = ?', [sanitizedDonor]);
+      if (senderUser) {
+        const corporateMatchingResults = await CorporateMatchingService.processCorporateMatching({
+          id: transaction.id,
+          amount: xlmAmount,
+          senderId: senderUser.id
+        });
+        if (corporateMatchingResults.length > 0) {
+          transaction.corporateMatchingDonations = corporateMatchingResults;
+        }
+      }
+    } catch (err) {
+      log.error('DONATION_SERVICE', 'Failed to process corporate matching', { error: err.message });
     }
 
     // Detect memo collision after the record is created so we have a transactionId
