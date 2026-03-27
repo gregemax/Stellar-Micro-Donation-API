@@ -89,6 +89,31 @@ module.exports = async () => {
       paidAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (feeId) REFERENCES student_fees(id)
     )`);
+    await Database.run(`CREATE TABLE IF NOT EXISTS recovery_guardians (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      walletId INTEGER NOT NULL,
+      guardianPublicKey TEXT NOT NULL,
+      threshold INTEGER,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (walletId, guardianPublicKey)
+    )`);
+    await Database.run(`CREATE TABLE IF NOT EXISTS recovery_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      walletId INTEGER NOT NULL,
+      newPublicKey TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      threshold INTEGER NOT NULL,
+      executeAfter DATETIME NOT NULL,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      executedAt DATETIME
+    )`);
+    await Database.run(`CREATE TABLE IF NOT EXISTS recovery_approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recoveryRequestId INTEGER NOT NULL,
+      guardianPublicKey TEXT NOT NULL,
+      approvedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (recoveryRequestId, guardianPublicKey)
+    )`);
     await Database.run(`CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp TEXT NOT NULL,

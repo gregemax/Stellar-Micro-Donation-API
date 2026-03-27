@@ -16,6 +16,7 @@ const config = require('../config');
 const stellarConfig = require('../config/stellar');
 const donationRoutes = require('./donation');
 const walletRoutes = require('./wallet');
+const recoveryRoutes = require('./recovery');
 const statsRoutes = require('./stats');
 const streamRoutes = require('./stream');
 const transactionRoutes = require('./transaction');
@@ -191,6 +192,7 @@ app.use(fieldFilterMiddleware());
 
 // Routes
 app.use('/wallets', walletRoutes);
+app.use('/', recoveryRoutes);
 app.use('/donations', donationRoutes);
 app.use('/donations/recurring', recurringDonationRoutes);
 app.use('/assets', assetRoutes);
