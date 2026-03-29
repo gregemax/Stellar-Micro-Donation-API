@@ -327,3 +327,48 @@ router.patch('/:id/signers/:key', checkPermission(PERMISSIONS.WALLETS_UPDATE), u
 });
 
 module.exports = router;
+
+// ─── Thresholds endpoint (issue #633) ────────────────────────────────────────
+
+const thresholdsRouter = express.Router();
+
+/**
+ * POST /wallets/:id/thresholds
+ * Set low/medium/high signing thresholds for a wallet account.
+ */
+thresholdsRouter.post('/:id/thresholds', checkPermission(PERMISSIONS.WALLETS_UPDATE), async (req, res, next) => {
+  try {
+    const walletId = parseInt(req.params.id, 10);
+    if (isNaN(walletId) || walletId < 1) {
+      throw new ValidationError('Invalid wallet ID', null, ERROR_CODES.INVALID_REQUEST);
+    }
+
+    const { low, medium, high, masterSecret } = req.body;
+
+    for (const [name, val] of [['low', low], ['medium', medium], ['high', high]]) {
+      if (!Number.isInteger(val) || val < 0 || val > 255) {
+        throw new ValidationError(`${name} threshold must be an integer between 0 and 255`);
+      }
+    }
+    if (!masterSecret) throw new ValidationError('masterSecret is required');
+
+    const Database = require('../utils/database');
+    const wallet = await Database.get('SELECT * FROM users WHERE id = ?', [walletId]);
+    if (!wallet) throw new NotFoundError('Wallet not found', ERROR_CODES.WALLET_NOT_FOUND);
+
+    const result = await stellarService.setThresholds(masterSecret, low, medium, high);
+
+    res.json({
+      success: true,
+      data: {
+        walletId,
+        thresholds: result.thresholds,
+        transaction: { hash: result.hash, ledger: result.ledger },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+module.exports.thresholdsRouter = thresholdsRouter;

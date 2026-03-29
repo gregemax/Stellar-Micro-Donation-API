@@ -2802,6 +2802,80 @@ class MockStellarService extends StellarServiceInterface {
       return paths;
     });
   }
+
+  // ─── Multi-sig simulation (issue #633) ──────────────────────────────────────
+
+  /**
+   * Simulate adding a signer to an account.
+   * @param {string} masterSecret
+   * @param {string} signerPublicKey
+   * @param {number} [weight=1]
+   */
+  async addSigner(masterSecret, signerPublicKey, weight = 1) {
+    if (!masterSecret) throw new Error('masterSecret is required');
+    if (!signerPublicKey) throw new Error('signerPublicKey is required');
+    const account = masterSecret.slice(0, 8);
+    if (!this._signers) this._signers = {};
+    if (!this._signers[account]) this._signers[account] = [];
+    this._signers[account] = this._signers[account].filter(s => s.key !== signerPublicKey);
+    this._signers[account].push({ key: signerPublicKey, weight });
+    return { hash: `mock-add-signer-${Date.now()}`, ledger: 1000, signer: signerPublicKey, weight };
+  }
+
+  /**
+   * Simulate removing a signer from an account.
+   * @param {string} masterSecret
+   * @param {string} signerPublicKey
+   */
+  async removeSigner(masterSecret, signerPublicKey) {
+    if (!masterSecret) throw new Error('masterSecret is required');
+    if (!signerPublicKey) throw new Error('signerPublicKey is required');
+    const account = masterSecret.slice(0, 8);
+    if (this._signers && this._signers[account]) {
+      this._signers[account] = this._signers[account].filter(s => s.key !== signerPublicKey);
+    }
+    return { hash: `mock-remove-signer-${Date.now()}`, ledger: 1001, signer: signerPublicKey };
+  }
+
+  /**
+   * Simulate setting account thresholds.
+   * @param {string} sourceSecret
+   * @param {number} low
+   * @param {number} medium
+   * @param {number} high
+   */
+  async setThresholds(sourceSecret, low, medium, high) {
+    if (!sourceSecret) throw new Error('sourceSecret is required');
+    for (const [name, val] of [['low', low], ['medium', medium], ['high', high]]) {
+      if (!Number.isInteger(val) || val < 0 || val > 255) {
+        throw new Error(`${name} threshold must be an integer between 0 and 255`);
+      }
+    }
+    const account = sourceSecret.slice(0, 8);
+    if (!this._thresholds) this._thresholds = {};
+    this._thresholds[account] = { low, medium, high };
+    return { hash: `mock-set-thresholds-${Date.now()}`, ledger: 1002, thresholds: { low, medium, high } };
+  }
+
+  /**
+   * Get simulated signers for an account (keyed by first 8 chars of secret).
+   * @param {string} masterSecret
+   * @returns {Array<{key: string, weight: number}>}
+   */
+  getSigners(masterSecret) {
+    const account = masterSecret.slice(0, 8);
+    return (this._signers && this._signers[account]) || [];
+  }
+
+  /**
+   * Get simulated thresholds for an account.
+   * @param {string} sourceSecret
+   * @returns {{low: number, medium: number, high: number}|null}
+   */
+  getThresholds(sourceSecret) {
+    const account = sourceSecret.slice(0, 8);
+    return (this._thresholds && this._thresholds[account]) || null;
+  }
 }
 
 module.exports = MockStellarService;

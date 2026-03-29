@@ -1875,6 +1875,48 @@ class StellarService extends StellarServiceInterface {
       };
     }, 'updateSignerWeight');
   }
+
+  /**
+   * Set account signing thresholds (low, medium, high).
+   *
+   * @param {string} sourceSecret - Secret key of the account
+   * @param {number} low - Low threshold (0-255)
+   * @param {number} medium - Medium threshold (0-255)
+   * @param {number} high - High threshold (0-255)
+   * @returns {Promise<{hash: string, ledger: number, thresholds: {low, medium, high}}>}
+   */
+  async setThresholds(sourceSecret, low, medium, high) {
+    return StellarErrorHandler.wrap(async () => {
+      const { ValidationError } = require('../utils/errors');
+
+      for (const [name, val] of [['low', low], ['medium', medium], ['high', high]]) {
+        if (!Number.isInteger(val) || val < 0 || val > 255) {
+          throw new ValidationError(`${name} threshold must be an integer between 0 and 255`);
+        }
+      }
+
+      const keypair = StellarSdk.Keypair.fromSecret(sourceSecret);
+      const account = await this._executeWithRetry(
+        () => this.server.loadAccount(keypair.publicKey()),
+        'loadAccountForSetThresholds'
+      );
+
+      const transaction = new StellarSdk.TransactionBuilder(account, {
+        fee: this.baseFee,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(StellarSdk.Operation.setOptions({ lowThreshold: low, medThreshold: medium, highThreshold: high }))
+        .setTimeout(30)
+        .build();
+
+      transaction.sign(keypair);
+      const result = await this._submitTransactionWithNetworkSafety(transaction);
+
+      log.info('STELLAR_SERVICE', 'Thresholds set', { account: keypair.publicKey(), low, medium, high, hash: result.hash });
+
+      return { hash: result.hash, ledger: result.ledger, thresholds: { low, medium, high } };
+    }, 'setThresholds');
+  }
   /**
    * Query the current order book snapshot for a trading pair.
    *
