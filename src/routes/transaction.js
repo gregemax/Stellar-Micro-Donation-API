@@ -154,6 +154,56 @@ router.post(
 );
 
 /**
+ * POST /transactions/multisig/collect
+ * Collect a signature for a pending multi-sig transaction.
+ * Automatically submits to the network when the required threshold is met.
+ * Returns 400 with required vs collected counts when threshold is not yet met.
+ */
+router.post(
+  '/multisig/collect',
+  checkPermission(PERMISSIONS.TRANSACTIONS_SYNC),
+  async (req, res, next) => {
+    try {
+      const { id, signer, signed_xdr } = req.body;
+
+      if (!id || !Number.isInteger(Number(id))) {
+        return res.status(400).json({ success: false, error: { code: 'INVALID_REQUEST', message: 'id is required and must be an integer' } });
+      }
+      if (!signer) {
+        return res.status(400).json({ success: false, error: { code: 'INVALID_REQUEST', message: 'signer is required' } });
+      }
+      if (!signed_xdr) {
+        return res.status(400).json({ success: false, error: { code: 'INVALID_REQUEST', message: 'signed_xdr is required' } });
+      }
+
+      const tx = await multiSigService.addSignature(Number(id), signer, signed_xdr);
+
+      const collected = tx.collected_signatures ? tx.collected_signatures.length : 0;
+      const required = tx.required_signers;
+      const thresholdMet = collected >= required;
+
+      if (!thresholdMet && tx.status === 'pending') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INSUFFICIENT_SIGNATURES',
+            message: 'Threshold not yet met',
+            required,
+            collected,
+            remaining: required - collected,
+          },
+          data: tx,
+        });
+      }
+
+      return res.status(200).json({ success: true, data: tx });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * POST /transactions/:id/sign
  * Add a signature to a pending multi-sig transaction.
  * Auto-submits when the required threshold is met.
