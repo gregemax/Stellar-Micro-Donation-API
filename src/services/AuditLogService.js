@@ -100,6 +100,9 @@ const AUDIT_ACTION = {
   HOME_DOMAIN_UPDATED: 'HOME_DOMAIN_UPDATED',
   // Bulk Operations
   BULK_WALLET_IMPORT: 'BULK_WALLET_IMPORT',
+
+  // Receipt Operations
+  RECEIPT_GENERATED: 'RECEIPT_GENERATED',
 };
 
 class AuditLogService {

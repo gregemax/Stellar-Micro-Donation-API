@@ -78,6 +78,12 @@ const { parseCursorPaginationQuery } = require('../utils/pagination');
 const AuditLogService = require('../services/AuditLogService');
 const auditLogRetentionService = require('../services/AuditLogRetentionService');
 const { runCleanup } = require('../jobs/cleanupJob');
+const { requireAdmin } = require('../middleware/rbac');
+const requireApiKey = require('../middleware/apiKey');
+const encryptionRoutes = require('./encryption');
+const authRoutes = require('./auth');
+const { metricsMiddleware, registry } = require('../utils/metrics');
+const { attachSubscriptionServer } = require('../graphql');
 
 const app = express();
 
@@ -209,6 +215,7 @@ app.use(fieldFilterMiddleware());
 app.use('/wallets', walletRoutes);
 app.use('/', recoveryRoutes);
 app.use('/donations', donationRoutes);
+app.use('/donations', require('./receipt'));
 app.use('/donations/recurring', recurringDonationRoutes);
 app.use('/assets', assetRoutes);
 app.use('/stats', statsRoutes);
@@ -551,6 +558,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const PORT = config.server.port;
+let cleanupInterval = null;
 
 async function startServer() {
   try {
@@ -589,7 +597,7 @@ async function startServer() {
       server.stopQuotaResetJob = stopQuotaResetJob;
 
       runCleanup(); // Run once on startup
-    const cleanupInterval = setInterval(runCleanup, 24 * 60 * 60 * 1000);
+      cleanupInterval = setInterval(runCleanup, 24 * 60 * 60 * 1000);
       
       // Initialize and start network status monitoring
       try {
