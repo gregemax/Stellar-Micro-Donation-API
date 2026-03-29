@@ -2671,6 +2671,62 @@ class MockStellarService extends StellarServiceInterface {
       return trustlines;
     });
   }
+
+  /**
+   * Simulate a transaction without submitting it to the network.
+   *
+   * Supports configurable outcomes via `setSimulationOutcome()` for testing:
+   * - 'success' (default): returns a valid simulation result
+   * - 'insufficient_balance': returns balance status as 'insufficient'
+   * - 'bad_sequence': returns sequence_validity as false
+   *
+   * @param {string} txEnvelope - Base64-encoded XDR transaction envelope (ignored in mock).
+   * @returns {Promise<{
+   *   estimated_fee: string,
+   *   sequence_validity: boolean,
+   *   source_account_balance_status: string,
+   *   operation_validity: boolean,
+   *   simulation_note: string
+   * }>}
+   * @throws {Error} If SIMULATION_ENABLED feature flag is false or outcome is 'error'.
+   */
+  async simulateTransaction(txEnvelope) {
+    if (process.env.SIMULATION_ENABLED === 'false') {
+      const err = new Error('Simulation Disabled');
+      err.code = 'SIMULATION_DISABLED';
+      throw err;
+    }
+
+    if (!txEnvelope || typeof txEnvelope !== 'string') {
+      const err = new Error('Invalid transaction envelope XDR');
+      err.code = 'INVALID_XDR';
+      throw err;
+    }
+
+    const outcome = this._simulationOutcome || 'success';
+
+    if (outcome === 'error') {
+      const err = new Error('Simulation error');
+      err.code = 'SIMULATION_ERROR';
+      throw err;
+    }
+
+    return {
+      estimated_fee: '0.0001000',
+      sequence_validity: outcome !== 'bad_sequence',
+      source_account_balance_status: outcome === 'insufficient_balance' ? 'insufficient' : 'sufficient',
+      operation_validity: true,
+      simulation_note: 'Dry-run only. Results are estimates. No transaction was submitted. Secret keys are not required.',
+    };
+  }
+
+  /**
+   * Configure the outcome for the next simulateTransaction call.
+   * @param {'success'|'insufficient_balance'|'bad_sequence'|'error'} outcome
+   */
+  setSimulationOutcome(outcome) {
+    this._simulationOutcome = outcome;
+  }
 }
 
 module.exports = MockStellarService;

@@ -2094,6 +2094,78 @@ class StellarService extends StellarServiceInterface {
     };
   }
 
+  /**
+   * Simulate a Stellar transaction without submitting it to the network.
+   *
+   * Parses the provided XDR envelope, loads the source account from Horizon,
+   * and validates fee, sequence number, and source account balance.
+   * No transaction is ever submitted — `submitTransaction` is never called.
+   *
+   * @param {string} txEnvelope - Base64-encoded XDR transaction envelope.
+   * @returns {Promise<{
+   *   estimated_fee: string,
+   *   sequence_validity: boolean,
+   *   source_account_balance_status: string,
+   *   operation_validity: boolean,
+   *   simulation_note: string
+   * }>}
+   * @throws {Error} If SIMULATION_ENABLED feature flag is false or the envelope is invalid.
+   */
+  async simulateTransaction(txEnvelope) {
+    if (process.env.SIMULATION_ENABLED === 'false') {
+      const err = new Error('Simulation Disabled');
+      err.code = 'SIMULATION_DISABLED';
+      throw err;
+    }
+
+    return StellarErrorHandler.wrap(async () => {
+      let tx;
+      try {
+        tx = StellarSdk.TransactionBuilder.fromXDR(txEnvelope, this.networkPassphrase);
+      } catch (_e) {
+        const err = new Error('Invalid transaction envelope XDR');
+        err.code = 'INVALID_XDR';
+        throw err;
+      }
+
+      const sourcePublicKey = tx.source;
+      const txFeeStroops = parseInt(tx.fee, 10);
+      const txSequence = BigInt(tx.sequence);
+
+      // Load source account from Horizon (read-only)
+      let account;
+      try {
+        account = await this._executeWithRetry(
+          () => this.server.loadAccount(sourcePublicKey),
+          'simulateTransaction_loadAccount'
+        );
+      } catch (loadErr) {
+        const err = new Error('Source account not found on network');
+        err.code = 'ACCOUNT_NOT_FOUND';
+        throw err;
+      }
+
+      const accountSequence = BigInt(account.sequenceNumber());
+      const sequenceValid = txSequence === accountSequence + 1n;
+
+      const nativeBalance = account.balances.find(b => b.asset_type === 'native');
+      const balanceXLM = parseFloat(nativeBalance ? nativeBalance.balance : '0');
+      const feeXLM = txFeeStroops / 1e7;
+      const balanceStatus = balanceXLM >= feeXLM + 1.0 ? 'sufficient' : 'insufficient';
+
+      const operationCount = tx.operations.length;
+      const operationValid = operationCount > 0;
+
+      return {
+        estimated_fee: (txFeeStroops / 1e7).toFixed(7),
+        sequence_validity: sequenceValid,
+        source_account_balance_status: balanceStatus,
+        operation_validity: operationValid,
+        simulation_note: 'Dry-run only. Results are estimates. No transaction was submitted. Secret keys are not required.',
+      };
+    }, 'simulateTransaction');
+  }
+
 }
 
 module.exports = StellarService;

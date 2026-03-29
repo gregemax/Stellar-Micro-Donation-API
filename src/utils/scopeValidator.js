@@ -41,6 +41,7 @@ const ALL_SCOPES = Object.freeze([
   // Transactions
   'transactions:read',
   'transactions:sync',
+  'transactions:simulate',
   'transactions:export',
   
   // API Key Management

@@ -197,5 +197,61 @@ router.get(
   }
 );
 
+// ─── Transaction Simulation Endpoint ─────────────────────────────────────────
+
+/**
+ * POST /transactions/simulate
+ * Dry-run simulate a Stellar transaction without submitting it.
+ *
+ * Accepts a Base64-encoded XDR transaction envelope and returns fee estimates,
+ * sequence validity, balance status, and operation validity.
+ * No secret key is required. submitTransaction is never called.
+ */
+router.post(
+  '/simulate',
+  payloadSizeLimiter(ENDPOINT_LIMITS.transaction),
+  checkPermission(PERMISSIONS.TRANSACTIONS_SIMULATE),
+  async (req, res, next) => {
+    try {
+      const { tx_envelope } = req.body;
+
+      if (!tx_envelope || typeof tx_envelope !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'MISSING_TX_ENVELOPE',
+            message: 'tx_envelope (Base64 XDR) is required',
+          },
+        });
+      }
+
+      const stellarService = serviceContainer.getStellarService();
+      const result = await stellarService.simulateTransaction(tx_envelope);
+
+      return res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      if (err.code === 'SIMULATION_DISABLED') {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'SIMULATION_DISABLED', message: err.message },
+        });
+      }
+      if (err.code === 'INVALID_XDR') {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_XDR', message: err.message },
+        });
+      }
+      if (err.code === 'ACCOUNT_NOT_FOUND') {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'ACCOUNT_NOT_FOUND', message: err.message },
+        });
+      }
+      next(err);
+    }
+  }
+);
+
 module.exports = router;
 
