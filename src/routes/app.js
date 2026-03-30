@@ -26,6 +26,7 @@ const { router: networkRoutes, setService: setNetworkService } = require('./netw
 const docsRoutes = require('./docs');
 const transactionRoutes = require('./transaction');
 const sseManager = require('../services/SseManager');
+const { router: corporateMatchingRoutes } = require('./corporateMatching');
 
 const app = express();
 
@@ -166,6 +167,7 @@ app.use('/stream', streamRoutes);
 app.use('/network', networkRoutes);
 app.use('/docs', docsRoutes);
 app.use('/transactions', transactionRoutes);
+app.use('/', corporateMatchingRoutes);
 
 // Health check endpoint
 // Health check endpoints
